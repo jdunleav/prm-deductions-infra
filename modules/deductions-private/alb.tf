@@ -1,68 +1,63 @@
-resource "aws_alb" "alb" {
-  name            = "${var.environment}-${var.component_name}-alb"
-  subnets         = module.vpc.public_subnets 
-  security_groups = [aws_security_group.pds-adaptor-lb-sg.id]
-}
-
-resource "aws_alb_target_group" "alb-tg" {
-  name        = "${var.environment}-${var.component_name}-pds-a-tg"
-  port        = 3000
-  protocol    = "HTTP"
-  vpc_id      = module.vpc.vpc_id
-  target_type = "ip"
-}
-
-resource "aws_alb_target_group" "gp2gp-alb-tg" {
-  name        = "${var.environment}-${var.component_name}-gp2gp-tg"
-  port        = 80
-  protocol    = "HTTP"
-  vpc_id      = module.vpc.vpc_id
-  target_type = "ip"
-}
-
-# Redirect all traffic from the ALB to the target group
-resource "aws_alb_listener" "alb-listener" {
-  load_balancer_arn = aws_alb.alb.arn
-  port              = "80"
-  protocol          = "HTTP"
-
-  default_action {
-    type = "fixed-response"
-
-    fixed_response {
-      content_type = "text/plain"
-      message_body = "Error"
-      status_code  = "501"
-    }
-  }
-}
-
-resource "aws_alb_listener_rule" "pds-adaptor-alb-listener-rule" {
-  listener_arn = aws_alb_listener.alb-listener.arn
-  priority     = 100
-
-  action {
-    type             = "forward"
-    target_group_arn = aws_alb_target_group.alb-tg.arn
-  }
-
-  condition {
-    field  = "host-header"
-    values = ["dev.pds-adaptor.patient-deductions.nhs.uk"]
-  }
-}
-
-resource "aws_alb_listener_rule" "gp2gp-alb-listener-rule" {
-  listener_arn = aws_alb_listener.alb-listener.arn
-  priority     = 101
-
-  action {
-    type             = "forward"
-    target_group_arn = aws_alb_target_group.gp2gp-alb-tg.arn
-  }
-
-  condition {
-    field  = "host-header"
-    values = ["dev.gp2gp-adaptor.patient-deductions.nhs.uk"]
-  }
-}
+# resource "aws_alb" "alb" {
+#   name            = "${var.environment}-${var.component_name}-alb"
+#   subnets         = module.vpc.public_subnets
+#   security_groups = [aws_security_group.deductions-private-alb-sg.id]
+#
+#   tags = {
+#     Terraform = "true"
+#     Environment = var.environment
+#     Deductions-VPC = var.component_name
+#   }
+# }
+#
+# resource "aws_alb_listener" "alb-listener" {
+#   load_balancer_arn = aws_alb.alb.arn
+#   port              = "80"
+#   protocol          = "HTTP"
+#
+#   default_action {
+#     type = "fixed-response"
+#
+#     fixed_response {
+#       content_type = "text/plain"
+#       message_body = "Error"
+#       status_code  = "501"
+#     }
+#   }
+# }
+#
+# resource "aws_alb_listener" "alb-listener-https" {
+#   load_balancer_arn = aws_alb.alb.arn
+#   port              = "443"
+#   protocol          = "HTTPS"
+#
+#   ssl_policy      = "ELBSecurityPolicy-TLS-1-2-2017-01"
+#   certificate_arn = aws_acm_certificate_validation.admin-cert-validation.certificate_arn
+#
+#   default_action {
+#     type = "fixed-response"
+#
+#     fixed_response {
+#       content_type = "text/plain"
+#       message_body = "Error"
+#       status_code  = "501"
+#     }
+#   }
+# }
+#
+# resource "aws_lb_listener_certificate" "example" {
+#   listener_arn    = aws_alb_listener.alb-listener-https.arn
+#   certificate_arn = aws_acm_certificate_validation.gp2gp-cert-validation.certificate_arn
+# }
+#
+# resource "aws_lb_listener_certificate" "gp-to-repo-listener-cert" {
+#   listener_arn    = aws_alb_listener.alb-listener-https.arn
+#   certificate_arn = aws_acm_certificate_validation.gp-to-repo-cert-validation.certificate_arn
+# }
+#
+# resource "aws_lb_listener_certificate" "generic-component-listener-cert" {
+#   listener_arn    = aws_alb_listener.alb-listener-https.arn
+#   certificate_arn = aws_acm_certificate_validation.generic-component-cert-validation.certificate_arn
+# }
+#
+#

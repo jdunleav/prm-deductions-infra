@@ -3,16 +3,25 @@
 set -Eeo pipefail
 
 AWS_REGION=eu-west-2
+NHS_SERVICE=deductions-infra
+
+function check_env {
+  if [[ -z "${NHS_ENVIRONMENT}" ]]; then
+    echo "Must set NHS_ENVIRONMENT"
+    exit 1
+  fi
+}
 
 function tf_plan {
+  check_env
   operation=$1
 
-  terraform init
+  terraform init -backend-config key=${NHS_SERVICE}-${NHS_ENVIRONMENT}/terraform.tfstate
   terraform get # modules
   if [[ "${operation}" == "create" ]]; then
-    terraform plan -var-file=terraform.tfvars -out="nhs_deployment.tfplan"
+    terraform plan -var my_ip=`curl icanhazip.com` -var-file=${NHS_ENVIRONMENT}.tfvars -out="nhs_deployment.tfplan"
   elif [[ "${operation}" == "destroy" ]]; then
-    terraform plan -var-file=terraform.tfvars -out="nhs_deployment.tfplan" -destroy
+    terraform plan -var-file=${NHS_ENVIRONMENT}.tfvars -out="nhs_deployment.tfplan" -destroy
   else
     echo "Unknown operation (should be create or destroy), got: ${operation}"
     exit 1
@@ -20,28 +29,208 @@ function tf_plan {
 }
 
 function tf_apply {
-  terraform init
+  check_env
+  terraform init -backend-config key=${NHS_SERVICE}-${NHS_ENVIRONMENT}/terraform.tfstate
   terraform get # modules
   terraform apply nhs_deployment.tfplan
   terraform output -json > tf-out.json
 }
 
+function create_secret {
+  secret_id="$1"
+  set +e
+  value=$(aws ssm get-parameter --region $AWS_REGION --name $secret_id | jq -r ".Parameter.Value")
+  if [[ $? == 0 ]]; then
+    echo "Secret at $secret_id already exists"
+  else
+    set -e
+    echo "Secret does not exists. Creating $secret_id"
+    value=$(openssl rand -base64 24)
+    aws ssm put-parameter \
+     --region $AWS_REGION \
+     --name $secret_id \
+     --type SecureString \
+     --overwrite \
+     --value "$value"
+  fi
+}
+
+function create_value {
+  value_id="$1"
+  value="$2"
+  set +e
+  value=$(aws ssm get-parameter --region $AWS_REGION --name $value_id | jq -r ".Parameter.Value")
+  if [[ $? == 0 ]]; then
+    echo "Value at $value_id already exists"
+  else
+    set -e
+    echo "Value does not exists. Creating $value_id"
+    aws ssm put-parameter \
+     --region $AWS_REGION \
+     --name $value_id \
+     --type String \
+     --overwrite \
+     --value "$value"
+  fi
+}
+
+function get_aws_value {
+  secret_id=$1
+  json=$(aws ssm get-parameter --region $AWS_REGION --name $secret_id)
+  if [ $? != 0 ]; then
+    >&2 echo "Failed to obtain SSM value: $secret_id"
+    exit 5
+  fi
+  echo $json | jq -r ".Parameter.Value"
+}
+
+function generate_ssh_key {
+  secret_id="/NHS/deductions/ssh/id_rsa"
+  ssh_directory=modules/ssh
+  mkdir -p ${ssh_directory}/
+  if [[ ! -f "${ssh_directory}/id_rsa" ]]; then
+    #TODO check aws authentication
+    set +e
+    id_rsa=$(aws ssm get-parameter --with-decryption --region $AWS_REGION --name $secret_id | jq -r ".Parameter.Value")
+    if [[ $? == 0 ]]; then
+      echo "$id_rsa" > ${ssh_directory}/id_rsa
+    else
+      set -e
+      ssh-keygen -f "${ssh_directory}/id_rsa" -q -N ""
+    fi
+    set -e
+  fi
+  chmod 0600 ${ssh_directory}/id_rsa
+  ssh-keygen -y -f "${ssh_directory}/id_rsa" > "${ssh_directory}/id_rsa.pub"
+  aws ssm put-parameter \
+   --region $AWS_REGION \
+   --name $secret_id \
+   --type SecureString \
+   --overwrite \
+   --value "`cat ${ssh_directory}/id_rsa`"
+}
+
 command="$1"
 case "${command}" in
+  _ssh_key)
+      check_env
+      generate_ssh_key
+      ;;
+  ssh_key)
+      dojo "./tasks _ssh_key"
+      ;;
+  _tf)
+      check_env
+      terraform init -backend-config key=${NHS_SERVICE}-${NHS_ENVIRONMENT}/terraform.tfstate
+      bash
+      ;;
   tf)
-      dojo "bash"
+      dojo "./tasks _tf"
       ;;
   _tf_plan)
+      ./tasks _ssh_key
       tf_plan "$2"
       ;;
   tf_plan)
+      check_env
       dojo "./tasks _tf_plan $2"
       ;;
   _tf_apply)
+      ./tasks _ssh_key
       tf_apply
       ;;
   tf_apply)
+      check_env
       dojo "./tasks _tf_apply"
+      ;;
+  _create_secrets)
+      create_secret "/nhs/${NHS_ENVIRONMENT}/db/db-username"
+      create_secret "/nhs/${NHS_ENVIRONMENT}/db/db-password"
+      create_secret "/nhs/${NHS_ENVIRONMENT}/mq/admin-username"
+      create_secret "/nhs/${NHS_ENVIRONMENT}/mq/admin-password"
+      create_secret "/nhs/${NHS_ENVIRONMENT}/mq/app-username"
+      create_secret "/nhs/${NHS_ENVIRONMENT}/mq/app-password"
+      account_id=$(aws sts get-caller-identity | jq -r .Account)
+      ;;
+  create_secrets)
+      # Needs to run only once, when adding new environment
+      check_env
+      dojo "./tasks _create_secrets"
+      ;;
+  sanity_check)
+      dojo "./tasks _sanity_check"
+      ;;
+  _sanity_check)
+      check_env
+      nslookup ${NHS_ENVIRONMENT}.alb.patient-deductions.nhs.uk
+      curl -i --fail "http://${NHS_ENVIRONMENT}.alb.patient-deductions.nhs.uk"
+      ;;
+  _detect_active_mq)
+      account_id=$(aws sts get-caller-identity | jq -r .Account)
+      MQ_ENDPOINT_1=$(get_aws_value "/NHS/${NHS_ENVIRONMENT}-${account_id}/amqp-endpoint/0")
+      MQ_ENDPOINT_2=$(get_aws_value "/NHS/${NHS_ENVIRONMENT}-${account_id}/amqp-endpoint/1")
+      MQ_HOST_1=$(echo $MQ_ENDPOINT_1 | sed 's#amqp+ssl://##' | sed 's#:5671##')
+      MQ_HOST_2=$(echo $MQ_ENDPOINT_2 | sed 's#amqp+ssl://##' | sed 's#:5671##')
+      if nc -zvw3 $MQ_HOST_1 5671; then
+        MQ_ENDPOINT_ACTIVE=$MQ_ENDPOINT_1
+      elif nc -zvw3 $MQ_HOST_2 5671; then
+        MQ_ENDPOINT_ACTIVE=$MQ_ENDPOINT_2
+      else
+        echo 'No MQ endpoint is reachable'
+        exit 3;
+      fi
+      aws ssm put-parameter \
+       --region "${AWS_REGION}" \
+       --name "/NHS/${NHS_ENVIRONMENT}-${account_id}/amqp-endpoint/active" \
+       --type String \
+       --overwrite \
+       --value "$MQ_ENDPOINT_ACTIVE"
+      echo "Stored active MQ endpoint at /NHS/${NHS_ENVIRONMENT}-${account_id}/amqp-endpoint/active"
+      ;;
+  detect_active_mq)
+      check_env
+      dojo "./tasks _detect_active_mq"
+      ;;
+  _generate_ansible_vars)
+      dns1=$(cat tf-out.json | jq -r ".dns_server_1.value")
+      if [ "${NHS_ENVIRONMENT}" == "dev" ]; then
+        cat << EOF > ansible/group_vars/${NHS_ENVIRONMENT}.yml
+# This file is generated
+env: ${NHS_ENVIRONMENT}
+dns1: ${dns1}
+vpn_clients_subnet: 10.233.235.0/24
+vpn_clients_subnet_short: 10.233.235.0
+mhs_route: 10.33.0.0 255.255.0.0
+deductions_private_route: 10.20.0.0 255.255.0.0
+deductions_core_route: 10.25.0.0 255.255.0.0
+vpc_subnet: 10.33.0.0/16
+stunnel_client_port: 1337
+EOF
+      elif [ "${NHS_ENVIRONMENT}" == "test" ]; then
+        cat << EOF > ansible/group_vars/${NHS_ENVIRONMENT}.yml
+# This file is generated
+env: ${NHS_ENVIRONMENT}
+dns1: ${dns1}
+vpn_clients_subnet: 10.233.236.0/24
+vpn_clients_subnet_short: 10.233.236.0
+mhs_route: 10.239.68.128 255.255.255.128
+deductions_private_route: 10.21.0.0 255.255.0.0
+deductions_core_route: 10.26.0.0 255.255.0.0
+vpc_subnet: 10.239.68.128/25
+stunnel_client_port: 1338
+EOF
+      fi
+      ;;
+  generate_ansible_vars)
+      dojo "./tasks _generate_ansible_vars"
+      ;;
+  _provision)
+      ansible-playbook -i ansible/inventory/$NHS_ENVIRONMENT.ini ansible/site.yml
+      ;;
+  provision)
+      check_env
+      ./tasks generate_ansible_vars
+      dojo -c Dojofile-ansible "./tasks _provision"
       ;;
   *)
       echo "Invalid command: '${command}'"

@@ -13,6 +13,32 @@ variable "component_name" {
   default     = "deductions-private"
 }
 
+variable "cidr" {}
+
+variable "mhs_cidr" {}
+
+variable "allowed_public_ips" {}
+
+variable "public_subnets" {
+  type = list
+}
+
+variable "private_subnets" {
+  type = list
+}
+
+variable "database_subnets" {
+  type = list
+}
+
+variable "azs" {
+  type = list
+}
+
+variable "pds_deregistration_delay" {
+  default = 15
+}
+
 # deductions-public mq variables
 variable "broker_name" {
   type = string
@@ -34,6 +60,10 @@ variable "deployment_mode" {
   type        = string
   default     = "ACTIVE_STANDBY_MULTI_AZ"
   description = "The deployment mode of the broker. Supported: SINGLE_INSTANCE and ACTIVE_STANDBY_MULTI_AZ"
+}
+
+variable "mq_deployment_mode" {
+  type = string
 }
 
 variable "engine_type" {
@@ -111,3 +141,7 @@ variable "mq_application_password" {
 variable "mq_allow_public_console_access"{
   description = "Will create an NLB in two public subnets to provide internet access to the MQ admin console"
 }
+
+variable "state_db_allocated_storage" {}
+variable "state_db_engine_version" {}
+variable "state_db_instance_class" {}

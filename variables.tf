@@ -7,6 +7,10 @@ variable "environment" {
   type = string
 }
 
+variable "my_ip" {
+  default = "127.0.0.1"
+}
+
 variable "deductions_public_component_name" {
   type = string
 }
@@ -35,12 +39,54 @@ variable "deductions_public_azs" {
   type = list
 }
 
-variable "deductions_public_create_bastion" {
-  type = bool
+variable "deductions_private_cidr" {
+  type = string
 }
+
+variable "deductions_private_public_subnets" {
+  type = list
+}
+
+variable "deductions_private_private_subnets" {
+  type = list
+}
+
+variable "deductions_private_database_subnets" {
+  type = list
+}
+
+variable "deductions_private_azs" {
+  type = list
+}
+
+variable "deductions_core_cidr" {
+  type = string
+}
+
+variable "deductions_core_public_subnets" {
+  type = list
+}
+
+variable "deductions_core_private_subnets" {
+  type = list
+}
+
+variable "deductions_core_database_subnets" {
+  type = list
+}
+
+variable "deductions_core_azs" {
+  type = list
+}
+
+variable "mhs_cidr" {}
 
 # deductions-public mq variables
 variable "broker_name" {
+  type = string
+}
+
+variable "mq_deployment_mode" {
   type = string
 }
 
@@ -137,3 +183,7 @@ variable "mq_application_password" {
 variable "mq_allow_public_console_access"{
   description = "Will create an NLB in two public subnets to provide internet access to the MQ admin console"
 }
+
+variable "state_db_allocated_storage" {}
+variable "state_db_engine_version" {}
+variable "state_db_instance_class" {}

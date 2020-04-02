@@ -1,4 +1,33 @@
 format_version: 4
+common:
+  apply_job: &apply_job
+    resources:
+      - docker
+    artifacts:
+      - build:
+          source: tf-out.json
+    tasks:
+      - exec:
+          command: /bin/bash
+          arguments:
+            - -c
+            - ./tasks create_secrets
+      - exec:
+          command: /bin/bash
+          arguments:
+            - -c
+            - ./tasks tf_plan create
+      - exec:
+          command: /bin/bash
+          arguments:
+            - -c
+            - ./tasks tf_apply
+      - exec:
+          command: /bin/bash
+          arguments:
+            - -c
+            - ./tasks provision
+
 pipelines:
   "prm-deductions-infra":
     group: deductions
@@ -7,23 +36,66 @@ pipelines:
       git:
         type: configrepo
     stages:
-      - deploy:
+      - deploy_dev:
           clean_workspace: true
+          environment_variables:
+            NHS_ENVIRONMENT: dev
           jobs:
-            apply:
+            apply: *apply_job
+      - check_dev:
+          clean_workspace: true
+          environment_variables:
+            NHS_ENVIRONMENT: dev
+          jobs:
+            test:
               resources:
-                - docker
-              artifacts:
-                - build:
-                    source: tf-out.json
+                - dev
+                - deductions-private # Agent runs in deductions private
               tasks:
                 - exec:
                     command: /bin/bash
                     arguments:
                       - -c
-                      - ./tasks tf_plan create
+                      - ./tasks sanity_check
+            active_mq:
+              resources:
+                - dev
+                - mhs # Agent runs in mhs vpc
+              tasks:
                 - exec:
                     command: /bin/bash
                     arguments:
                       - -c
-                      - ./tasks tf_apply
+                      - ./tasks detect_active_mq
+
+      - deploy_test:
+          clean_workspace: true
+          environment_variables:
+            NHS_ENVIRONMENT: test
+          jobs:
+            apply: *apply_job
+      - check_test:
+          clean_workspace: true
+          environment_variables:
+            NHS_ENVIRONMENT: test
+          jobs:
+            test:
+              resources:
+                - test
+                - deductions-private # Agent runs in deductions private
+              tasks:
+                - exec:
+                    command: /bin/bash
+                    arguments:
+                      - -c
+                      - ./tasks sanity_check
+            active_mq:
+              resources:
+                - test
+                - mhs # Agent runs in mhs vpc
+              tasks:
+                - exec:
+                    command: /bin/bash
+                    arguments:
+                      - -c
+                      - ./tasks detect_active_mq
